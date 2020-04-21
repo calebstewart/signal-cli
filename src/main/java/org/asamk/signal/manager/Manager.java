@@ -25,6 +25,7 @@ import org.asamk.signal.NotAGroupMemberException;
 import org.asamk.signal.StickerPackInvalidException;
 import org.asamk.signal.TrustLevel;
 import org.asamk.signal.UserAlreadyExists;
+import org.asamk.signal.dbus.DBusContact;
 import org.asamk.signal.storage.SignalAccount;
 import org.asamk.signal.storage.contacts.ContactInfo;
 import org.asamk.signal.storage.groups.GroupInfo;
@@ -82,6 +83,7 @@ import org.whispersystems.signalservice.api.messages.SignalServiceGroup;
 import org.whispersystems.signalservice.api.messages.SignalServiceReceiptMessage;
 import org.whispersystems.signalservice.api.messages.SignalServiceStickerManifestUpload;
 import org.whispersystems.signalservice.api.messages.SignalServiceStickerManifestUpload.StickerInfo;
+import org.whispersystems.signalservice.api.messages.SignalServiceTypingMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.BlockedListMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.ContactsMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.DeviceContact;
@@ -100,6 +102,7 @@ import org.whispersystems.signalservice.api.push.ContactTokenDetails;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import org.whispersystems.signalservice.api.push.exceptions.EncapsulatedExceptions;
 import org.whispersystems.signalservice.api.push.exceptions.NetworkFailureException;
+import org.whispersystems.signalservice.api.push.exceptions.RateLimitException;
 import org.whispersystems.signalservice.api.push.exceptions.UnregisteredUserException;
 import org.whispersystems.signalservice.api.util.InvalidNumberException;
 import org.whispersystems.signalservice.api.util.SleepTimer;
@@ -118,6 +121,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Array;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
@@ -545,6 +549,89 @@ public class Manager implements Signal {
         return sendMessageLegacy(messageBuilder, g.getMembersWithout(account.getSelfAddress()));
     }
 
+    @Override
+    public long sendGroupMessageWithRecipients(String messageText, List<String> attachments,
+                                               byte[] groupId, List<String> recipients)
+            throws IOException, EncapsulatedExceptions, GroupNotFoundException, AttachmentInvalidException, InvalidNumberException {
+        final SignalServiceDataMessage.Builder messageBuilder = SignalServiceDataMessage.newBuilder().withBody(messageText);
+        if (attachments != null) {
+            messageBuilder.withAttachments(Utils.getSignalServiceAttachments(attachments));
+        }
+        if (groupId != null) {
+            SignalServiceGroup group = SignalServiceGroup.newBuilder(SignalServiceGroup.Type.DELIVER)
+                    .withId(groupId)
+                    .build();
+            messageBuilder.asGroupMessage(group);
+        }
+
+        return sendMessageLegacy(messageBuilder, getSignalServiceAddresses(recipients));
+    }
+
+    @Override
+    public long sendGroupQuote(String number, long timestamp, String quotedText,
+                          List<String> quotedAttachmentNames, String message,
+                          List<String> attachments, byte[] groupid)
+            throws IOException, EncapsulatedExceptions, GroupNotFoundException, AttachmentInvalidException, InvalidNumberException
+    {
+        SignalServiceAddress author = canonicalizeAndResolveSignalServiceAddress(number);
+        final SignalServiceDataMessage.Builder builder = SignalServiceDataMessage.newBuilder();
+        List<SignalServiceDataMessage.Quote.QuotedAttachment> quotedAttachments = new ArrayList<>(quotedAttachmentNames.size());
+        SignalServiceMessageSender sender = this.getMessageSender();
+        SignalServiceGroup group = SignalServiceGroup.newBuilder(SignalServiceGroup.Type.DELIVER)
+                .withId(groupid)
+                .build();
+        final GroupInfo groupinfo = getGroupForSending(groupid);
+
+        builder.asGroupMessage(group);
+
+        builder.withExpiration(groupinfo.messageExpirationTime);
+
+        // Upload quoted attachments
+        for ( SignalServiceAttachment a : Utils.getSignalServiceAttachments(quotedAttachmentNames) ){
+            if( a.isPointer() ) {
+                quotedAttachments.add(new SignalServiceDataMessage.Quote.QuotedAttachment(
+                        a.getContentType(),
+                        a.asStream().getFileName().or("preview"),
+                        a
+                ));
+            } else if ( a.isStream() ) {
+                SignalServiceAttachmentStream stream = a.asStream();
+                quotedAttachments.add(new SignalServiceDataMessage.Quote.QuotedAttachment(
+                        stream.getContentType(),
+                        stream.getFileName().or("preview"),
+                        stream
+                ));
+            }
+        }
+
+        // Add the quote
+        builder.withQuote(new SignalServiceDataMessage.Quote(
+                timestamp, author, quotedText, quotedAttachments)
+        );
+
+        // Add message
+        builder.withBody(message);
+
+        if (attachments != null) {
+            List<SignalServiceAttachment> signalAttachments = Utils.getSignalServiceAttachments(attachments);
+
+            // Upload attachments
+            List<SignalServiceAttachment> attachmentPointers = new ArrayList<>(signalAttachments.size());
+            for( SignalServiceAttachment a : signalAttachments ) {
+                if (a.isStream()) {
+                    attachmentPointers.add(sender.uploadAttachment(a.asStream()));
+                } else if ( a.isPointer() ){
+                    attachmentPointers.add(a.asPointer());
+                }
+            }
+
+            builder.withAttachments(attachmentPointers);
+        }
+
+        return sendMessageLegacy(builder, groupinfo.getMembersWithout(account.getSelfAddress()));
+    }
+
+	@Override
     public void sendGroupMessageReaction(String emoji, boolean remove, String targetAuthor,
                                          long targetSentTimestamp, byte[] groupId)
             throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException {
@@ -687,6 +774,56 @@ public class Manager implements Signal {
     }
 
     @Override
+    public void sendReceipt(String recipient, String type, List<Long> messageIds) throws InvalidNumberException, IOException, UntrustedIdentityException {
+        SignalServiceReceiptMessage receiptMessage = new SignalServiceReceiptMessage(
+                SignalServiceReceiptMessage.Type.valueOf(type),
+                messageIds,
+                System.currentTimeMillis()
+        );
+        SignalServiceAddress address = canonicalizeAndResolveSignalServiceAddress(recipient);
+
+        getMessageSender().sendReceipt(address, getAccessFor(address), receiptMessage);
+    }
+
+    @Override
+    public long sendTypingMessage(boolean typing, List<String> recipients) throws InvalidNumberException, IOException {
+        final SignalServiceTypingMessage typingMessage = new SignalServiceTypingMessage(
+                typing ? SignalServiceTypingMessage.Action.STARTED : SignalServiceTypingMessage.Action.STOPPED,
+                System.currentTimeMillis(), Optional.absent()
+        );
+        final List<SignalServiceAddress> recipientAddresses = new ArrayList<SignalServiceAddress>(getSignalServiceAddresses(recipients));
+        SignalServiceMessageSender sender = getMessageSender();
+
+        try {
+            sender.sendTyping(recipientAddresses, getAccessFor(recipientAddresses), typingMessage);
+        } catch ( RateLimitException e ) {
+            // This only happens with typing messages, and I don't know why...
+        }
+
+        return typingMessage.getTimestamp();
+    }
+
+    @Override
+    public long sendGroupTypingMessage(boolean typing, byte[] group_id) throws IOException {
+        final GroupInfo group = getGroup(group_id);
+        final SignalServiceTypingMessage typingMessage = new SignalServiceTypingMessage(
+                typing ? SignalServiceTypingMessage.Action.STARTED : SignalServiceTypingMessage.Action.STOPPED,
+                System.currentTimeMillis(), Optional.of(group_id)
+        );
+        final List<SignalServiceAddress> recipientAddresses = new ArrayList<SignalServiceAddress>(group.members);
+        SignalServiceMessageSender sender = getMessageSender();
+
+        try {
+            sender.sendTyping(recipientAddresses, getAccessFor(recipientAddresses), typingMessage);
+        } catch ( RateLimitException e ) {
+            // This happens sometimes for group messages, and I don't know why.
+            // It usually gets delivered to part of the recipients and not others.
+        }
+
+        return typingMessage.getTimestamp();
+    }
+
+    @Override
     public long sendMessage(String message, List<String> attachments, String recipient)
             throws EncapsulatedExceptions, AttachmentInvalidException, IOException, InvalidNumberException {
         List<String> recipients = new ArrayList<>(1);
@@ -718,6 +855,70 @@ public class Manager implements Signal {
         return sendMessageLegacy(messageBuilder, getSignalServiceAddresses(recipients));
     }
 
+    public long sendQuote(String number, long timestamp, String quotedText,
+                          List<String> quotedAttachmentNames, String message,
+                          List<String> attachments, String recipient)
+            throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException
+    {
+        return sendQuote(number, timestamp, quotedText, quotedAttachmentNames,
+                message, attachments, Arrays.asList(recipient));
+    }
+
+    @Override
+    public long sendQuote(String number, long timestamp, String quotedText,
+                          List<String> quotedAttachmentNames, String message,
+                          List<String> attachments, List<String> recipients)
+            throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException
+    {
+        SignalServiceAddress author = canonicalizeAndResolveSignalServiceAddress(number);
+        final SignalServiceDataMessage.Builder builder = SignalServiceDataMessage.newBuilder();
+        List<SignalServiceDataMessage.Quote.QuotedAttachment> quotedAttachments = new ArrayList<>(quotedAttachmentNames.size());
+        SignalServiceMessageSender sender = this.getMessageSender();
+
+        // Upload quoted attachments
+        for ( SignalServiceAttachment a : Utils.getSignalServiceAttachments(quotedAttachmentNames) ){
+            // Ensure the attachment is uploaded
+            if (a.isStream()) {
+                a = sender.uploadAttachment(a.asStream());
+            } else {
+                a = a.asPointer();
+            }
+
+            quotedAttachments.add(new SignalServiceDataMessage.Quote.QuotedAttachment(
+                    a.getContentType(),
+                    a.asPointer().getFileName().or("preview"),
+                    a
+            ));
+        }
+
+        // Add the quote
+        builder.withQuote(new SignalServiceDataMessage.Quote(
+                timestamp, author, quotedText, quotedAttachments)
+        );
+
+        // Add message
+        builder.withBody(message);
+
+        if (attachments != null) {
+            List<SignalServiceAttachment> signalAttachments = Utils.getSignalServiceAttachments(attachments);
+
+            // Upload attachments
+            List<SignalServiceAttachment> attachmentPointers = new ArrayList<>(signalAttachments.size());
+            for( SignalServiceAttachment a : signalAttachments ) {
+                if (a.isStream()) {
+                    attachmentPointers.add(sender.uploadAttachment(a.asStream()));
+                } else if ( a.isPointer() ){
+                    attachmentPointers.add(a.asPointer());
+                }
+            }
+
+            builder.withAttachments(attachmentPointers);
+        }
+
+        return sendMessageLegacy(builder, this.getSignalServiceAddresses(recipients));
+    }
+
+	@Override
     public void sendMessageReaction(String emoji, boolean remove, String targetAuthor,
                                     long targetSentTimestamp, List<String> recipients)
             throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException {
@@ -726,6 +927,17 @@ public class Manager implements Signal {
                 .withReaction(reaction);
         sendMessageLegacy(messageBuilder, getSignalServiceAddresses(recipients));
     }
+
+	@Override
+	public void sendMessageReaction(String emoji, boolean remove, String targetAuthor,
+                                    long targetSentTimestamp, String recipient)
+            throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException {
+			List<String> recipients = new ArrayList<>(1);
+			recipients.add(recipient);
+			sendMessageReaction(emoji, remove, targetAuthor, targetSentTimestamp,
+					recipients);
+	}
+
 
     @Override
     public void sendEndSessionMessage(List<String> recipients) throws IOException, EncapsulatedExceptions, InvalidNumberException {
@@ -847,6 +1059,11 @@ public class Manager implements Signal {
         account.getContactStore().updateContact(c);
     }
 
+	@Override
+	public void setExpirationTimer(String number, int messageExpirationTimer) throws InvalidNumberException {
+		setExpirationTimer(canonicalizeAndResolveSignalServiceAddress(number), messageExpirationTimer);
+	}
+
     /**
      * Change the expiration timer for a group
      */
@@ -855,6 +1072,11 @@ public class Manager implements Signal {
         g.messageExpirationTime = messageExpirationTimer;
         account.getGroupStore().updateGroup(g);
     }
+
+	@Override
+	public void setGroupExpirationTimer(byte[] groupId, int messageExpirationTimer) {
+		setExpirationTimer(groupId, messageExpirationTimer);
+	}
 
     /**
      * Upload the sticker pack from path.

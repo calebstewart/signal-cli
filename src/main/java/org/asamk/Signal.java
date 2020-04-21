@@ -2,9 +2,11 @@ package org.asamk;
 
 import org.asamk.signal.AttachmentInvalidException;
 import org.asamk.signal.GroupNotFoundException;
+import org.asamk.signal.storage.contacts.ContactInfo;
 import org.freedesktop.dbus.DBusInterface;
 import org.freedesktop.dbus.DBusSignal;
 import org.freedesktop.dbus.exceptions.DBusException;
+import org.whispersystems.signalservice.api.crypto.UntrustedIdentityException;
 import org.whispersystems.signalservice.api.push.exceptions.EncapsulatedExceptions;
 import org.whispersystems.signalservice.api.util.InvalidNumberException;
 
@@ -17,9 +19,40 @@ public interface Signal extends DBusInterface {
 
     long sendMessage(String message, List<String> attachments, List<String> recipients) throws EncapsulatedExceptions, AttachmentInvalidException, IOException, InvalidNumberException;
 
+    void sendReceipt(String recipient, String type, List<Long> messageIds) throws InvalidNumberException, IOException, UntrustedIdentityException;
+
+    long sendTypingMessage(boolean typing, List<String> recipients) throws InvalidNumberException, IOException;
+
+	void sendMessageReaction(String emoji, boolean remove, String targetAuthor,
+			long targetSentTimestamp, List<String> recipients) throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException;
+
+	void sendMessageReaction(String emoji, boolean remove, String targetAuthor,
+			long targetSentTimestamp, String recipients) throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException;
+
+    long sendQuote(String number, long timestamp, String quotedText,
+                          List<String> quotedAttachmentNames, String message,
+                          List<String> attachments, List<String> recipients)
+            throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException;
+
     void sendEndSessionMessage(List<String> recipients) throws IOException, EncapsulatedExceptions, InvalidNumberException;
 
     long sendGroupMessage(String message, List<String> attachments, byte[] groupId) throws EncapsulatedExceptions, GroupNotFoundException, AttachmentInvalidException, IOException;
+
+    long sendGroupTypingMessage(boolean typing, byte[] group_id) throws InvalidNumberException, IOException;
+
+
+    long sendGroupMessageWithRecipients(String messageText, List<String> attachments,
+                                           byte[] groupId, List<String> recipients)
+        throws IOException, EncapsulatedExceptions, GroupNotFoundException, AttachmentInvalidException, InvalidNumberException;
+
+	void sendGroupMessageReaction(String emoji, boolean remove, String targetAuthor,
+                                         long targetSentTimestamp, byte[] groupId) throws IOException, EncapsulatedExceptions, AttachmentInvalidException, InvalidNumberException;
+
+
+    long sendGroupQuote(String number, long timestamp, String quotedText,
+                               List<String> quotedAttachmentNames, String message,
+                               List<String> attachments, byte[] groupid)
+            throws IOException, EncapsulatedExceptions, GroupNotFoundException, AttachmentInvalidException, InvalidNumberException;
 
     String getContactName(String number) throws InvalidNumberException;
 
@@ -28,6 +61,10 @@ public interface Signal extends DBusInterface {
     void setContactBlocked(String number, boolean blocked) throws InvalidNumberException;
 
     void setGroupBlocked(byte[] groupId, boolean blocked) throws GroupNotFoundException;
+
+	void setExpirationTimer(String number, int messageExpirationTimer) throws InvalidNumberException;
+
+	void setGroupExpirationTimer(byte[] groupId, int messageExpirationTimer);
 
     List<byte[]> getGroupIds();
 
@@ -79,25 +116,26 @@ public interface Signal extends DBusInterface {
 
     class ReceiptReceived extends DBusSignal {
 
-        private long timestamp;
-        private String sender;
+    	private long timestamp;
+    	private String sender;
 
-        public ReceiptReceived(String objectpath, long timestamp, String sender) throws DBusException {
-            super(objectpath, timestamp, sender);
-            this.timestamp = timestamp;
+	    public ReceiptReceived(String objectpath, long timestamp, String sender) throws DBusException {
+	    	super(objectpath, timestamp, sender);
+	        this.timestamp = timestamp;
             this.sender = sender;
-        }
+	    }
 
         public long getTimestamp() {
-            return timestamp;
-        }
+	    	return timestamp;
+	    }
 
-        public String getSender() {
-            return sender;
-        }
+	    public String getSender() {
+	    	return sender;
+	    }
     }
 
-    class SyncMessageReceived extends DBusSignal {
+
+	class SyncMessageReceived extends DBusSignal {
         private long timestamp;
         private String source;
         private String destination;

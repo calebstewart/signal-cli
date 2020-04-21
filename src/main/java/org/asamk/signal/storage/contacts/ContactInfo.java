@@ -3,6 +3,7 @@ package org.asamk.signal.storage.contacts;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import org.freedesktop.dbus.DBusInterface;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 
 import java.util.UUID;
@@ -48,4 +49,5 @@ public class ContactInfo {
     public SignalServiceAddress getAddress() {
         return new SignalServiceAddress(uuid, number);
     }
+
 }

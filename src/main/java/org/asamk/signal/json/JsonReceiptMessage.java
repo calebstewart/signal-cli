@@ -21,5 +21,6 @@ class JsonReceiptMessage {
             this.isRead = true;
         }
         this.timestamps = receiptMessage.getTimestamps();
+        receiptMessage.getType();
     }
 }

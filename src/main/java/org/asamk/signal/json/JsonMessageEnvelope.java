@@ -16,6 +16,7 @@ public class JsonMessageEnvelope {
     JsonSyncMessage syncMessage;
     JsonCallMessage callMessage;
     JsonReceiptMessage receiptMessage;
+    JsonTypingMessage typingMessage;
 
     public JsonMessageEnvelope(SignalServiceEnvelope envelope, SignalServiceContent content) {
         if (!envelope.isUnidentifiedSender() && envelope.hasSource()) {
@@ -42,6 +43,9 @@ public class JsonMessageEnvelope {
             }
             if (content.getReceiptMessage().isPresent()) {
                 this.receiptMessage = new JsonReceiptMessage(content.getReceiptMessage().get());
+            }
+            if (content.getTypingMessage().isPresent()) {
+                this.typingMessage = new JsonTypingMessage(content.getTypingMessage().get());
             }
         }
     }

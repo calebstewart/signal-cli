@@ -1,5 +1,6 @@
 package org.asamk.signal.json;
 
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachment;
 import org.whispersystems.signalservice.api.messages.SignalServiceGroup;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import org.whispersystems.util.Base64;
@@ -13,6 +14,7 @@ class JsonGroupInfo {
     List<String> members;
     String name;
     String type;
+    JsonAttachment avatar;
 
     JsonGroupInfo(SignalServiceGroup groupInfo) {
         this.groupId = Base64.encodeBytes(groupInfo.getGroupId());
@@ -26,6 +28,9 @@ class JsonGroupInfo {
             this.name = groupInfo.getName().get();
         }
         this.type = groupInfo.getType().toString();
+        if (groupInfo.getAvatar().isPresent()) {
+            this.avatar = new JsonAttachment(groupInfo.getAvatar().get());
+        }
     }
 
     JsonGroupInfo(byte[] groupId) {
